@@ -11,6 +11,12 @@ against a model stored on disk. There is no server, no account, no telemetry, no
 and it works with no internet connection. The only thing that ever leaves your machine is the
 optional Pavlok API call, which sends a stimulus command and nothing else — never an image.
 
+### [⬇ Download for Windows](https://github.com/AugustineSoft/Rewire-Guard/releases/latest/download/RewireGuard-Setup.exe)
+
+No administrator rights required. Windows will warn you the first time because the build is not
+code-signed — choose **More info → Run anyway**. See [Installing](#installing) for the portable
+version and checksums.
+
 ---
 
 ## Contents
