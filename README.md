@@ -1,47 +1,266 @@
-# Rewire Guard (Windows client)
+# Rewire Guard
 
-Windows tray app: periodically screenshots the desktop, runs it through a
-local ONNX-exported NSFW classifier (AdamCodd/vit-base-nsfw-detector), and
-escalates an intervention if it keeps firing. Classification is fully
-local, no data is collected and the only thing that leaves your machine is the optional pavlok API calls.
+A Windows tray app that watches your screen for explicit content and steps in when it finds it.
 
-## Prerequisites
+It takes a screenshot every few seconds, runs it through an image classifier on your own machine,
+and escalates an on-screen intervention if content keeps appearing. If you have a
+[Pavlok](https://pavlok.com) wearable, it can send a vibration or zap alongside the overlay.
 
-- Windows 10/11
-- .NET 8 SDK
-- Visual Studio 2022 (or `dotnet build` from the CLI) -- Visual Studio is not
-  required but makes debugging the WPF XAML easier
-- Python 3.9+ (only needed once, to export the model)
+**Your screen never leaves your computer, and no data is collected.** Classification runs locally
+against a model stored on disk. There is no server, no account, no telemetry, no per-image cost,
+and it works with no internet connection. The only thing that ever leaves your machine is the
+optional Pavlok API call, which sends a stimulus command and nothing else — never an image.
 
-## 1. Get the model
+---
 
-The ONNX model is ~330 MB, past GitHub's 100 MB per-file limit, so it is **not** in this
-repository (`Models/*.onnx` is gitignored). Two ways to get one:
+## Contents
 
-**Let the app fetch it.** On first run, the start screen shows a *Download model* button. It
-pulls the published export from Hugging Face, verifies it against a known SHA-256, and starts
-monitoring without a restart. Nothing else is needed.
+- [Installing](#installing)
+- [System requirements](#system-requirements)
+- [First run](#first-run)
+- [How it behaves](#how-it-behaves)
+- [Settings](#settings)
+- [Pavlok setup](#pavlok-setup)
+- [Tuning performance](#tuning-performance)
+- [Troubleshooting](#troubleshooting)
+- [Building from source](#building-from-source)
 
-**Or export it yourself**, per `scripts/convert_to_onnx.md`:
+---
+
+## Installing
+
+**Installer (recommended)** — download `RewireGuard-Setup.exe` and run it. It installs for your
+user account only, so there is no administrator prompt, and it adds a Start Menu entry plus an
+uninstaller in Settings → Apps.
+
+**Portable** — download `RewireGuard-Portable.zip`, extract it anywhere, and run `RewireGuard.exe`.
+Nothing is written outside the folder except your settings and logs. Good for a USB stick or for
+trying it without installing.
+
+Neither version needs the .NET runtime, Visual Studio, or Python. Everything required is included.
+
+> The downloads are not code-signed, so Windows SmartScreen will warn you the first time.
+> Choose **More info → Run anyway**.
+
+### The app has no window
+
+Rewire Guard lives in the system tray, next to the clock. After the first run, launching it just
+places an icon there — that is normal, not a failed start. Right-click the icon for the menu, or
+double-click to pause and resume.
+
+---
+
+## System requirements
+
+### Minimum
+
+| | |
+|---|---|
+| OS | Windows 10 or Windows 11, 64-bit |
+| CPU | Any modern x64 processor |
+| RAM | 4 GB free |
+| Disk | ~620 MB installed |
+| Display | Any; multi-monitor supported |
+
+### What actually determines performance
+
+The classifier is a Vision Transformer (ViT-Base) running at 384×384. One pass is a real piece of
+compute, and the app may run several per screen check, so the hardware that matters is whatever
+can accelerate that.
+
+The installer ships two inference runtimes and picks one for you at first launch. **Settings →
+Accelerator** lets you override it:
+
+| Setting | Runs on | Works with |
+|---|---|---|
+| **Auto** (default) | NPU if present, otherwise GPU | Anything |
+| **Intel NPU** | Intel Core Ultra NPU, or Intel GPU | Core Ultra Series 1 and 2 |
+| **GPU** | Any DirectX 12 GPU | NVIDIA, AMD, Intel Arc / Iris Xe |
+| **CPU** | Processor only | Anything |
+
+Changing it takes effect after a restart, because the runtime cannot be replaced while it is
+loaded. The tray status line and the log both show which one is actually in use.
+
+Measured on one Core Ultra 7 155H laptop with an RTX 4060, same model and input size:
+
+| Running on | Per inference |
+|---|---|
+| CPU | 262 ms |
+| Intel Arc integrated GPU | 144 ms |
+| Intel NPU | 115 ms |
+| NVIDIA RTX 4060 | 37 ms |
+
+Treat those as one data point rather than a promise.
+
+### Why Auto prefers the NPU over a faster GPU
+
+A discrete GPU is several times quicker, but Rewire Guard runs continuously in the background.
+While a game or a video is on screen, everything changes every frame, so the change-detection
+optimisation saves nothing and a full set of inferences runs on every check. On the GPU that is
+sustained load competing with whatever you are actually doing. An NPU is otherwise idle silicon
+and costs the GPU nothing.
+
+If you would rather have the speed — or you have no NPU — set **Accelerator** to **GPU**. On a
+laptop with both integrated and discrete graphics, the app measures each adapter once and keeps
+the faster one, so it will not silently settle for the integrated GPU.
+
+### Memory and battery
+
+Expect roughly **1 GB** of working set while running, most of which is the model file mapped into
+memory rather than allocated.
+
+On a laptop, continuous screen checking will shorten battery life. The NPU path is markedly
+gentler than the CPU or GPU paths. If you are running on battery, raising **Poll interval** and
+lowering **Max tiles per poll** in Settings makes a large difference.
+
+> The **portable** build carries a single runtime and has no accelerator picker. Bundling native
+> libraries into a one-file executable means they are extracted to a temporary folder at launch,
+> which the runtime swap cannot work around. Use the installer if you need to choose.
+
+---
+
+## First run
+
+The start screen appears the first time you launch, showing what is ready and what is not.
+
+**Detection model.** The installer includes it, so this usually reads *Ready*. If it says
+*Not installed* — which happens with the portable build or a source checkout — click
+**Download model (330 MB)**. It is fetched once, verified against a known checksum, and
+monitoring begins immediately without a restart.
+
+**Pavlok device.** Optional. Click **Connect Pavlok** to link one, or **Continue without it** to
+run overlay-only. You can connect a device later from the tray menu.
+
+The start screen only reappears when something needs attention. Once the model is present and any
+device is connected, the app starts silently into the tray. You can reopen it any time from
+**tray icon → Start screen**.
+
+---
+
+## How it behaves
+
+When content is detected on consecutive checks, Rewire Guard escalates through three levels. Each
+level dims the screen further, shifts colour from amber toward red, and — if a Pavlok is connected
+— sends a stronger stimulus.
+
+| Level | Overlay | Default stimulus |
+|---|---|---|
+| 1 | Amber, light dim | Vibration |
+| 2 | Orange, heavier dim | Zap, intensity 30 |
+| 3 | Red, near-opaque | Zap, intensity 70 |
+
+Every escalation level offers two actions:
+
+- **Close active tab** sends Ctrl+W to the focused browser. At levels 2 and 3 the overlay then
+  holds for a short pause before releasing you. If the focused window is not a browser, nothing is
+  sent — Ctrl+W closes documents in other applications, and the app will not risk your unsaved
+  work.
+- **Override** dismisses the warning immediately. It confirms first, and applies a level 3
+  stimulus.
+
+The overlay clears on its own once the screen has stayed clean for the configured time. Pausing
+from the tray resets escalation to zero, so resuming always starts fresh rather than picking up
+where it left off.
+
+With a Pavlok connected, a stimulus fires on **every check that still detects content**, not only
+when the level increases. Closing the content stops it on the very next check.
+
+---
+
+## Settings
+
+Open from **tray icon → Settings**. Changes apply immediately; there is no restart.
+
+**Monitoring** — how often the screen is checked, how confident a detection must be, whether to
+watch all monitors, and the two performance switches described below.
+
+**Escalation** — how many consecutive checks raise a level, how long the screen must stay clean
+before clearing, and the length of the pause after closing a tab. The escalation slider shows how
+long your settings actually take to reach level 3, which is worth reading before changing it.
+
+**Pavlok** — the minimum gap between stimuli, and the type and intensity for each level.
+
+**Application** — start with Windows, whether the overlay pulls itself back to the front, and a
+shortcut to the log folder.
+
+Settings are stored in `appsettings.json` beside the executable. An upgrade never overwrites it.
+
+---
+
+## Pavlok setup
+
+Entirely optional; the overlay works without it.
+
+The most reliable method is an **API key** from your Pavlok dashboard, entered on the start
+screen. Unlike a login session, it does not expire. Signing in with email and password also works.
+
+Your credential is encrypted with your Windows account and stored at
+`%LOCALAPPDATA%\RewireGuard\token.bin`. It is never written to the settings file. If Pavlok
+rejects it later, the app clears it and prompts you to reconnect instead of silently failing.
+
+---
+
+## Tuning performance
+
+If checks take longer than your poll interval, the app logs it and simply checks less often — it
+will not queue up work or freeze. But you can bring the cost down considerably:
+
+| If you want | Change |
+|---|---|
+| Much lower CPU use | Raise **Poll interval** to 5–10 seconds |
+| Lower peak load per check | Lower **Max tiles per poll** |
+| The cheapest possible mode | Turn **Tiled scanning** off — whole-screen checks only |
+| Fewer wasted checks | Keep **Skip unchanged regions** on (default) |
+
+Two features do the heavy lifting by default. **Skip unchanged regions** compares each part of the
+screen against the previous check and reuses the earlier result where nothing moved, so an idle
+desktop costs almost nothing. **Max tiles per poll** caps how much work a single check can do;
+anything over the cap is carried to the next check rather than dropped, so coverage stays complete.
+
+Turning **Tiled scanning** off is the largest saving, at a real cost in accuracy: a whole-screen
+check shrinks your entire desktop to 384×384, which can wash out a small image in a feed. Tiling
+exists to catch exactly that.
+
+---
+
+## Troubleshooting
+
+**Nothing happens when I launch it.** Expected — it starts in the system tray. Check for the icon
+near the clock; it may be hidden behind the tray's overflow arrow.
+
+**It says the model is missing.** Open **tray icon → Start screen** and use the Download button.
+
+**It never detects anything.** Lower **Detection threshold** in Settings. Check the tray status
+line, which shows the highest score from the most recent check — if that number is well below your
+threshold, the threshold is the problem.
+
+**It triggers on innocent content.** Raise **Detection threshold**, and raise
+**Polls before escalating a level** so a single bad check cannot escalate.
+
+**It is using too much CPU.** Check the tray status line for which accelerator is in use. If it
+reads *CPU*, open **Settings → Accelerator** and pick one explicitly; the log records why the
+automatic choice was rejected. Otherwise see [Tuning performance](#tuning-performance).
+
+**It is slowing down my games.** Set **Settings → Accelerator** to **Intel NPU** if you have one,
+which leaves the GPU untouched. Failing that, raise **Poll interval**.
+
+**Full-screen video appears black to it.** Some hardware-accelerated video paths cannot be
+captured by the screen-grab method used here. This is a known limitation.
+
+**Something crashed.** Logs are at `%LOCALAPPDATA%\RewireGuard\logs`, reachable from
+**tray icon → Open log folder**. They record startup, accelerator selection, timings and errors —
+they contain no images and no screen content.
+
+---
+
+## Building from source
+
+Requires the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0). Visual Studio is
+optional and only helps for editing XAML.
 
 ```bash
-pip install optimum[exporters] transformers torch
+git clone https://github.com/AugustineSoft/Rewire-Guard.git
 ```
-
-```bash
-optimum-cli export onnx --model AdamCodd/vit-base-nsfw-detector --task image-classification onnx_out/
-```
-
-Copy `onnx_out/model.onnx` to `Models/model.onnx`.
-
-Note that your own export will not be byte-identical to the published one -- different
-optimum/opset versions serialize the graph differently -- but the weights and label order are the
-same. Check `onnx_out/config.json`'s `id2label` and make sure `NsfwLabelIndex` in
-`appsettings.json` actually points at the "nsfw" class; don't assume it's 1. The classifier fails
-loudly at startup if the index is out of range for the model's output, rather than silently
-reading the wrong class.
-
-## 2. Build and run
 
 ```bash
 dotnet build -c Release
@@ -51,153 +270,50 @@ dotnet build -c Release
 dotnet run -c Release
 ```
 
-Or open `RewireGuard.sln` in Visual Studio and hit F5. The app has no main
-window -- it starts minimized to the system tray. Double-click the tray icon
-to pause/resume; right-click for the menu.
-
 Run the tests with:
 
 ```bash
 dotnet test
 ```
 
-## 3. Autostart
+### The model is not in the repository
 
-Settings -> **Start with Windows**, or the same toggle in the tray menu. This writes the exe path to
-`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. Untick it to remove the
-entry. (A real installer -- MSIX or Squirrel -- is still the better answer if
-you want this to feel like a shipped app rather than a build output, but the
-registry entry covers the actual need.)
+At ~330 MB it exceeds GitHub's file size limit, so `Models/*.onnx` is excluded. Use the in-app
+download on first run, or export it yourself following `scripts/convert_to_onnx.md`:
 
-## The interface
+```bash
+optimum-cli export onnx --model AdamCodd/vit-base-nsfw-detector --task image-classification onnx_out/
+```
 
-All windows share one dark theme (`UI/Theme.xaml`) and draw their own chrome, because the
-Win32 title bar is light-themed and can't be recoloured from WPF.
+Copy `onnx_out/model.onnx` to `Models/model.onnx`. If you export it yourself, check `id2label` in
+the exported `config.json` and confirm `NsfwLabelIndex` in `appsettings.json` points at the "nsfw"
+class — the ordering is not guaranteed.
 
-- **Start screen** (`UI/StartWindow.xaml`) -- what the app does, whether the model and device
-  are actually ready, then a connect pane taking either an API key or email/password. Shown
-  automatically when there's no credential, and any time from the tray menu.
-- **Settings** (`UI/SettingsWindow.xaml`) -- monitoring, escalation, per-level stimulus type and
-  intensity, and app behaviour. Edits a clone, so Cancel costs nothing. Saving copies onto the
-  shared `AppConfig` every service holds, which is what makes changes apply without a restart;
-  the poll timer, capture service and tile cache are rebuilt explicitly.
-- **Overlay** (`UI/OverlayWindow.xaml`) -- escalation level drives the accent colour, the filled
-  segment count, and how far the backdrop dims.
-- **Confirm dialog** (`UI/ConfirmDialog.xaml`) -- replaces `MessageBox`, which rendered as a
-  white system window in the middle of a dark full-screen overlay.
+### Building the installer
 
-`UI/Theme.xaml` is loaded by absolute pack URI rather than a relative one so the windows can
-also be constructed from a separate assembly, which is how the design renders were reviewed
-offscreen instead of by putting a full-screen overlay on a real desktop.
+```bash
+./installer/build.ps1 -Version 1.0.0
+```
 
-## Pavlok
+This publishes the app, then produces `dist/RewireGuard-Setup.exe` and
+`dist/RewireGuard-Portable.zip`. WiX is restored automatically as a NuGet package; nothing needs
+installing first. Add `-IncludeModel:$false` for a much smaller build that relies on the in-app
+download, or `-PortableOnly` to skip the installer while iterating.
 
-Off unless `PavlokEnabled` is true in `appsettings.json` (it is, by default). Everything below
-is also editable from Settings.
+### Using an NVIDIA GPU or DirectML
 
-Credentials are read in this order and never come from the config file:
+Replace the `Intel.ML.OnnxRuntime.OpenVino` package reference in `RewireGuard.csproj` with
+`Microsoft.ML.OnnxRuntime.Gpu` (CUDA) or `Microsoft.ML.OnnxRuntime.DirectML`, then rebuild. The
+app queries ONNX Runtime for available accelerators at startup and will pick up the new one with
+no code change.
 
-1. `PAVLOK_API_KEY` environment variable (preferred -- dashboard-issued key)
-2. `PAVLOK_EMAIL` + `PAVLOK_PASSWORD` environment variables
-3. A cached token in `%LOCALAPPDATA%\RewireGuard\token.bin`, DPAPI-encrypted
-   to the current Windows user
-4. A login dialog
+---
 
-A `.env` in the repo root (or up to six directories above the build output) is
-loaded into the process environment for dev convenience.
+## Known limitations
 
-A stimulus fires on **every poll that is still positive**, not only when the
-escalation level increases -- so the cadence is set by
-`PavlokMinSecondsBetweenStimuli` (default 3s) rather than by the escalation
-ramp. Closing the content stops stimuli on the very next poll, because the
-trigger is gated on the current poll being positive rather than on the overlay
-level, which lingers by design.
-
-If the API rejects the token, it is cleared and re-authentication is attempted
-once a minute at most, rather than firing doomed requests forever.
-
-## How it works
-
-- `Services/ScreenCaptureService.cs` -- grabs the whole virtual desktop via GDI
-  every `PollIntervalSeconds` into a reused buffer, and reports each monitor's
-  rectangle so the content band is computed per display
-- `Services/HierarchicalScanner.cs` -- coarse whole-frame pass plus an
-  overlapping tile grid; skips tiles whose pixels haven't changed and caps
-  inferences per poll (see Performance below)
-- `Services/TileGrid.cs` -- the tile geometry, kept pure so it can be tested
-- `Services/NsfwClassifier.cs` -- resizes, normalizes, runs the ONNX model,
-  returns a probability
-- `Services/EscalationManager.cs` -- tracks consecutive positive frames,
-  raises escalation level (0-3), resets after `CleanMinutesToReset` of clean
-  frames
-- `Services/Log.cs` -- rolling log at `%LOCALAPPDATA%\RewireGuard\logs`
-- `UI/OverlayWindow.xaml(.cs)` -- overlay spanning every monitor, whose
-  backdrop opacity and accent colour scale with escalation level
-- `App.xaml.cs` -- wires it all together, owns the tray icon and polling timer
-
-## Performance
-
-A ViT-base forward pass is not cheap, and a naive tiling of a 2560x1440 desktop
-is ~26 inferences per poll. Three things keep that survivable:
-
-- **Change detection** (`ChangeDetectionEnabled`): each tile carries an 8x8 luma
-  signature; unchanged tiles reuse their previous probability instead of paying
-  for another pass. An idle desktop costs roughly one inference per poll.
-- **A per-poll budget** (`MaxTilesPerPoll`, default 12): changed tiles are
-  scanned first, and anything over the budget is deferred to the next poll
-  rather than dropped, so coverage stays complete over a few polls.
-- **Provider selection**: OpenVINO NPU/GPU and DirectML are used when the
-  runtime reports them, checked against `GetAvailableProviders()` rather than
-  by attempting each one blind.
-
-The tray menu's status line shows the active execution provider, the last
-frame's peak probability, tile count and scan duration. If scans routinely
-exceed the poll interval, that gets logged.
-
-## Configuration
-
-Everything lives in `appsettings.json`, is range-checked at load, and falls back
-to defaults (with a tray warning) if the file is malformed. Notable knobs beyond
-the detection thresholds:
-
-| Key | Default | Notes |
-| --- | --- | --- |
-| `MaxTilesPerPoll` | 12 | Inference budget per poll |
-| `ChangeDetectionEnabled` | true | Skip unchanged tiles |
-| `CaptureAllMonitors` | true | Virtual desktop vs. primary only |
-| `PavlokMinSecondsBetweenStimuli` | 3 | Real cadence limiter |
-| `SitSecondsLevel2` / `SitSecondsLevel3` | 20 / 60 | "Sit with it" pause |
-| `OverlayFocusLock` | false | Pull overlay back to front, swallow Alt+Tab |
-| `BrowserProcessNames` | chrome, msedge, ... | Allowlist for "Close active tab" |
-
-## Design notes
-
-- **No dismiss button on the overlay by design** -- it's meant to sit there
-  until the escalation manager clears on its own. "Override" exists but costs a
-  level 3 stimulus, and says so before you confirm.
-- **"Close active tab" only targets browsers.** Ctrl+W closes the current
-  document in Word, the current file in Visual Studio, and the current window in
-  Explorer. Sending it at whatever happens to be focused is a good way to lose
-  unsaved work, so the foreground process must be on `BrowserProcessNames`.
-  Anything else is refused with a message rather than guessed at.
-- **Pausing resets escalation to 0.** Level used to survive a pause, so the
-  first positive poll after resuming fired a level 3 stimulus with no ramp and
-  no overlay.
-
-## Known limitations / things to revisit
-
-- **Full-desktop capture, not content-region capture.** Tiling mitigates this
-  (small thumbnails in a feed get their own near-native-resolution pass), but
-  the app still doesn't know which window is the browser. Capturing just the
-  foreground window's client area would be more precise and cheaper.
-- **GDI capture doesn't see hardware-overlay video.** Some full-screen
-  accelerated video paths render black to `BitBlt`. A Desktop Duplication API
-  capture path would fix that and be faster, at the cost of more code.
-- **`ContentRegionWidthFraction` is a fixed centered band per monitor.** It
-  assumes a roughly centered browser window; a maximized window on an
-  ultrawide, or a tiled half-screen layout, will not line up.
-- **No installer and no code signing.** SmartScreen will warn on first run.
-- **Change detection can mask a slow fade.** Content that changes below
-  `ChangeDetectionThreshold` per poll reuses a stale clean probability. The
-  threshold is deliberately low (1.5/255 mean luma delta) but it is a tradeoff;
-  set `ChangeDetectionEnabled: false` to scan everything every poll.
+- Hardware-accelerated full-screen video can capture as black.
+- The scan region is a fixed centred band on each monitor, which assumes a roughly centred
+  window. A tiled or off-centre layout may not line up.
+- Builds are unsigned, so SmartScreen warns on first run.
+- Skipping unchanged regions can miss content that fades in very gradually. Turn the setting off
+  to check everything on every pass.

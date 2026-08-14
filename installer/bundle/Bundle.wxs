@@ -26,14 +26,11 @@
 
     <Chain>
       <!--
-        DisplayInternalUI stays off: the bundle already shows progress, and letting the MSI draw
-        its own UI on top produces two overlapping installers.
-
-        Visible="no" hides the MSI's separate Apps-and-Features entry, so uninstalling is done
-        through the bundle and there is exactly one thing to remove.
+        The MSI draws no UI of its own; the bundle owns the whole experience. Visible="no" hides
+        the MSI's separate Apps-and-Features entry, so uninstalling goes through the bundle and
+        there is exactly one thing to remove.
       -->
       <MsiPackage SourceFile="$(var.RewireGuardMsi.TargetPath)"
-                  DisplayInternalUI="no"
                   Visible="no"
                   Compressed="yes" />
     </Chain>

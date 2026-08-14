@@ -119,6 +119,38 @@
                         </StackPanel>
                     </Border>
 
+                    <Border x:Name="AcceleratorCard" Style="{StaticResource Card}">
+                        <StackPanel>
+                            <Grid Margin="0,0,0,12">
+                                <StackPanel Margin="0,0,12,0">
+                                    <TextBlock Text="Accelerator" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock x:Name="AcceleratorHint" Style="{StaticResource RowHint}"/>
+                                </StackPanel>
+                            </Grid>
+
+                            <Border Style="{StaticResource SegmentGroup}" HorizontalAlignment="Stretch">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <RadioButton x:Name="AccelAuto" Grid.Column="0" GroupName="Accel" Content="Auto"
+                                                 Style="{StaticResource SegmentButton}" HorizontalContentAlignment="Center"/>
+                                    <RadioButton x:Name="AccelNpu" Grid.Column="1" GroupName="Accel" Content="Intel NPU"
+                                                 Style="{StaticResource SegmentButton}" HorizontalContentAlignment="Center"/>
+                                    <RadioButton x:Name="AccelGpu" Grid.Column="2" GroupName="Accel" Content="GPU"
+                                                 Style="{StaticResource SegmentButton}" HorizontalContentAlignment="Center"/>
+                                    <RadioButton x:Name="AccelCpu" Grid.Column="3" GroupName="Accel" Content="CPU"
+                                                 Style="{StaticResource SegmentButton}" HorizontalContentAlignment="Center"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock x:Name="AcceleratorNote" Style="{StaticResource RowHint}" Margin="0,10,0,0"/>
+                        </StackPanel>
+                    </Border>
+
                     <!-- ============ ESCALATION ============ -->
                     <TextBlock Text="ESCALATION" Style="{StaticResource SectionHeader}" Margin="0,14,0,12"/>
 

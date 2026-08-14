@@ -24,9 +24,29 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- OpenVINO build gives NPU/GPU acceleration on Intel hardware; the classifier falls back
-         to plain CPU automatically when no accelerated provider is present. -->
-    <PackageReference Include="Intel.ML.OnnxRuntime.OpenVino" Version="1.24.1" />
+    <!--
+      Exactly one ONNX Runtime native package can be referenced. Each ships its own
+      onnxruntime.dll, and whichever wins the file conflict becomes the only runtime the process
+      has: referencing both silently drops one, with no build error to warn you.
+
+      OpenVINO is the default because this app polls continuously in the background. On an Intel
+      Core Ultra it runs on the NPU, which leaves the GPU entirely free. That matters far more
+      than raw latency for something that has to keep working while you game. Measured on a Core
+      Ultra 7 155H: NPU ~115 ms per inference against ~37 ms on an RTX 4060 via DirectML, but the
+      DirectML path costs roughly 16% sustained GPU load at default settings.
+
+      Three variants, selected with -p:Accelerator=:
+
+        OpenVINO  (default)  Intel NPU / Intel GPU. Keeps the GPU free.
+        DirectML             Any DirectX 12 GPU, so NVIDIA and AMD. Fastest, uses the GPU.
+        CPU                  No accelerator. Smallest download, ~262 ms per inference.
+    -->
+    <PackageReference Include="Intel.ML.OnnxRuntime.OpenVino" Version="1.24.1"
+                      Condition="'$(Accelerator)' == '' or '$(Accelerator)' == 'OpenVINO'" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.24.1"
+                      Condition="'$(Accelerator)' == 'DirectML'" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.24.1"
+                      Condition="'$(Accelerator)' == 'CPU'" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.1" />
     <PackageReference Include="RestSharp" Version="114.0.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.8" />

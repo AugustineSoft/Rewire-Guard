@@ -19,11 +19,16 @@ public partial class SettingsWindow : ThemedWindow
     /// <summary>Populated on Save so the host can re-apply anything that needs more than a field write.</summary>
     public AppConfig? Result { get; private set; }
 
-    public SettingsWindow(AppConfig current, bool autostartEnabled, bool pavlokConnected)
+    private readonly string _acceleratorAtOpen;
+
+    public SettingsWindow(AppConfig current, bool autostartEnabled, bool pavlokConnected,
+                          string activeProvider = "")
     {
         InitializeComponent();
 
         _draft = current.Clone();
+        _acceleratorAtOpen = _draft.Accelerator;
+        SetUpAccelerator(activeProvider);
 
         MakeDraggable(HeaderBar);
         CloseButton.Click += (_, _) => Close();
@@ -39,6 +44,60 @@ public partial class SettingsWindow : ThemedWindow
         LoadInto(autostartEnabled);
         WireLiveLabels();
     }
+
+    /// <summary>
+    /// Populates the accelerator picker, hiding options this install cannot actually provide.
+    /// A single-runtime build (portable, or a plain dotnet build) ships one runtime baked in, so
+    /// offering a choice there would be a lie.
+    /// </summary>
+    private void SetUpAccelerator(string activeProvider)
+    {
+        if (!AcceleratorRuntime.IsSupported)
+        {
+            AcceleratorCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var installed = AcceleratorRuntime.Installed();
+        AccelNpu.IsEnabled = installed.Contains("OpenVINO", StringComparer.OrdinalIgnoreCase);
+        AccelGpu.IsEnabled = installed.Contains("DirectML", StringComparer.OrdinalIgnoreCase);
+        AccelCpu.IsEnabled = installed.Contains("CPU", StringComparer.OrdinalIgnoreCase);
+
+        switch (_draft.AcceleratorChoice)
+        {
+            case AcceleratorChoice.OpenVINO: AccelNpu.IsChecked = true; break;
+            case AcceleratorChoice.DirectML: AccelGpu.IsChecked = true; break;
+            case AcceleratorChoice.Cpu: AccelCpu.IsChecked = true; break;
+            default: AccelAuto.IsChecked = true; break;
+        }
+
+        AcceleratorHint.Text = AcceleratorRuntime.HasNpu()
+            ? "Auto prefers your NPU, which keeps the GPU free for games and other work."
+            : "No NPU detected, so Auto uses your GPU.";
+
+        AcceleratorNote.Text = string.IsNullOrEmpty(activeProvider)
+            ? "Takes effect after a restart."
+            : $"Currently running on {activeProvider}. Takes effect after a restart.";
+
+        foreach (var option in new[] { AccelAuto, AccelNpu, AccelGpu, AccelCpu })
+            option.Checked += (_, _) => UpdateRestartNote(activeProvider);
+    }
+
+    private void UpdateRestartNote(string activeProvider)
+    {
+        bool changed = ReadAccelerator() != _acceleratorAtOpen;
+        AcceleratorNote.Text = changed
+            ? "Restart Rewire Guard to switch. The runtime cannot be changed while it is loaded."
+            : string.IsNullOrEmpty(activeProvider)
+                ? "Takes effect after a restart."
+                : $"Currently running on {activeProvider}. Takes effect after a restart.";
+    }
+
+    private string ReadAccelerator() =>
+        AccelNpu.IsChecked == true ? "OpenVINO"
+        : AccelGpu.IsChecked == true ? "DirectML"
+        : AccelCpu.IsChecked == true ? "CPU"
+        : "Auto";
 
     private void LoadInto(bool autostartEnabled)
     {
@@ -179,6 +238,18 @@ public partial class SettingsWindow : ThemedWindow
 
         _draft.OverlayFocusLock = FocusLockToggle.IsChecked == true;
 
+        if (AcceleratorRuntime.IsSupported)
+        {
+            var chosen = ReadAccelerator();
+            if (chosen != _draft.Accelerator)
+            {
+                _draft.Accelerator = chosen;
+                // The DirectML adapter probe result belongs to the old runtime; force a re-probe.
+                _draft.DirectMLDeviceId = -1;
+                AcceleratorChanged = true;
+            }
+        }
+
         // Same validator the config loader runs, so the UI cannot write something the app would
         // then quietly clamp behind the user's back.
         _draft.Validated();
@@ -190,6 +261,9 @@ public partial class SettingsWindow : ThemedWindow
 
     /// <summary>Autostart lives in the registry, not the config file, so it is reported separately.</summary>
     public bool AutostartRequested { get; private set; }
+
+    /// <summary>Set when the accelerator changed, so the host can offer a restart.</summary>
+    public bool AcceleratorChanged { get; private set; }
 
     private static int ParseSeconds(string text, int fallback) =>
         int.TryParse(text?.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) && value > 0

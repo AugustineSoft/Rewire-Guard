@@ -17,16 +17,39 @@
     <HarvestPath Condition="'$(HarvestPath)' == ''">$(MSBuildThisFileDirectory)..\..\bin\publish</HarvestPath>
 
     <!--
-      IncludeModel=false produces a ~25 MB package with no ONNX model. The app still installs and
-      runs; it reports the missing model and points at the README. Useful for updating the
-      application on a machine that already has model.onnx.
+      Whether the ONNX model ships is decided by build.ps1, which stages the payload. A build
+      without it still installs and runs; the start screen then offers to download one.
     -->
-    <IncludeModel Condition="'$(IncludeModel)' == ''">true</IncludeModel>
     <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
 
     <DefineConstants>HarvestPath=$(HarvestPath);ProductVersion=$(ProductVersion)</DefineConstants>
-    <DefineConstants Condition="'$(IncludeModel)' == 'true'">$(DefineConstants);IncludeModel=1</DefineConstants>
+
+    <!--
+      The ICE38/ICE64/ICE91 family polices components that land in the user profile. Their rules
+      exist so a package can be installed either per-user or per-machine depending on ALLUSERS:
+      every component then needs an HKCU registry keypath, and every directory an explicit
+      RemoveFile entry.
+
+      This package is declared Scope="perUser" and cannot be installed any other way, so that
+      ambiguity does not exist. Satisfying the checks literally would mean a hand-written
+      registry keypath for each of ~495 harvested files, which would go stale the moment a
+      dependency changes its native payload.
+
+        ICE38 - per-user component keyed on a file rather than HKCU
+        ICE64 - user-profile directory with no RemoveFile entry
+                (handled at runtime instead by util:RemoveFolderEx in Package.wxs)
+        ICE91 - per-user directory that does not vary with ALLUSERS
+
+      ICE61 is left enabled but warns because AllowSameVersionUpgrades permits 1.0.0 over 1.0.0,
+      which is intended while iterating.
+    -->
+    <SuppressIces>ICE38;ICE64;ICE91</SuppressIces>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Provides util:RemoveFolderEx, used to clean the install tree on uninstall. -->
+    <PackageReference Include="WixToolset.Util.wixext" Version="5.0.2" />
+  </ItemGroup>
 
   <Target Name="VerifyHarvestPath" BeforeTargets="Build">
     <Error Condition="!Exists('$(HarvestPath)\RewireGuard.exe')"

@@ -74,6 +74,28 @@ public class AppConfig
     /// <summary>Capture every monitor (virtual desktop) rather than just the primary display.</summary>
     public bool CaptureAllMonitors { get; set; } = true;
 
+    /// <summary>
+    /// Inference runtime: Auto, OpenVINO, DirectML or CPU. Takes effect on the next launch,
+    /// because the native runtime cannot be replaced once it is loaded.
+    ///
+    /// Auto prefers an NPU when one is present. A discrete GPU is faster, but this app polls
+    /// continuously, and while a game is running every tile changes every frame, so the full
+    /// inference budget runs on every poll. That is sustained load taken from whatever is on
+    /// screen; an NPU is otherwise idle and costs the GPU nothing.
+    /// </summary>
+    public string Accelerator { get; set; } = "Auto";
+
+    /// <summary>
+    /// Which DirectML adapter to run inference on. -1 means measure each one at first startup and
+    /// keep the fastest, which is then written back here so later launches skip the probe.
+    ///
+    /// This is not cosmetic. DirectML adapter 0 is usually the integrated GPU, so simply taking
+    /// the default costs a laptop with a discrete card most of its performance -- measured on one
+    /// Core Ultra 7 155H with an RTX 4060, adapter 0 (Arc iGPU) ran 144 ms per inference against
+    /// adapter 1 (RTX 4060) at 37 ms.
+    /// </summary>
+    public int DirectMLDeviceId { get; set; } = -1;
+
     /// <summary>How many consecutive positive frames before escalation level increases.</summary>
     public int ConsecutiveHitsToEscalate { get; set; } = 2;
 
@@ -290,8 +312,24 @@ public class AppConfig
 
         BrowserProcessNames ??= new List<string>();
 
+        if (!Enum.TryParse<AcceleratorChoice>(
+                Accelerator?.Replace("CPU", "Cpu", StringComparison.OrdinalIgnoreCase) ?? "",
+                ignoreCase: true, out _))
+        {
+            Log.Warn($"Accelerator='{Accelerator}' is not one of Auto/OpenVINO/DirectML/CPU; using Auto.");
+            Accelerator = "Auto";
+        }
+
         return this;
     }
+
+    /// <summary>The <see cref="Accelerator"/> string as an enum, defaulting to Auto.</summary>
+    public AcceleratorChoice AcceleratorChoice =>
+        Enum.TryParse<AcceleratorChoice>(
+            Accelerator?.Replace("CPU", "Cpu", StringComparison.OrdinalIgnoreCase) ?? "",
+            ignoreCase: true, out var choice)
+            ? choice
+            : Services.AcceleratorChoice.Auto;
 
     private static int Clamp(int value, int min, int max, string name)
     {

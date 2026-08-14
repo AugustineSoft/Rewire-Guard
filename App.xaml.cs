@@ -30,6 +30,7 @@ public partial class App : Application
     private bool _paused;
     private bool _busy;
     private bool _shuttingDown;
+    private AcceleratorChoice _activeAccelerator = AcceleratorChoice.Auto;
 
     // Held for the lifetime of the process; releasing it is what lets the next instance start.
     private Mutex? _singleInstanceMutex;
@@ -74,7 +75,20 @@ public partial class App : Application
         // Load .env into process environment variables for local dev convenience.
         DotEnvLoader.Load();
 
+        // The installer does not ship appsettings.json, so an upgrade can never overwrite settings
+        // the user changed. Write the defaults out on first run instead, so there is still a file
+        // to hand-edit and to see the full set of keys in.
+        bool hadConfigFile = File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json"));
+
         _config = AppConfig.Load("appsettings.json", out var configError);
+
+        if (!hadConfigFile && configError == null)
+        {
+            if (_config.TrySave("appsettings.json", out var writeError))
+                Log.Info("Wrote a default appsettings.json.");
+            else
+                Log.Warn($"Could not write a default appsettings.json: {writeError}");
+        }
 
         _trayIcon = (TaskbarIcon)FindResource("TrayIcon");
         _trayIcon.TrayMouseDoubleClick += (_, _) => TogglePause();
@@ -84,6 +98,10 @@ public partial class App : Application
         {
             Notify($"appsettings.json could not be read ({configError}). Running with defaults.", BalloonIcon.Warning);
         }
+
+        // Must happen before anything touches ONNX Runtime: once the native library is loaded it
+        // cannot be replaced for the life of the process.
+        _activeAccelerator = AcceleratorRuntime.Apply(_config.AcceleratorChoice);
 
         _capture = new ScreenCaptureService(_config.CaptureAllMonitors);
 
@@ -193,8 +211,18 @@ public partial class App : Application
 
         try
         {
-            _classifier = new NsfwClassifier(modelPath, _config.InputSize, _config.NsfwLabelIndex);
+            _classifier = new NsfwClassifier(modelPath, _config.InputSize, _config.NsfwLabelIndex,
+                                             _config.DirectMLDeviceId);
             _scanner = new HierarchicalScanner(_classifier, _config);
+
+            // Remember which adapter won the probe so later launches skip it. Adapter 0 is
+            // typically the integrated GPU, so this is not a cosmetic saving.
+            if (_classifier.SelectedDeviceId != _config.DirectMLDeviceId)
+            {
+                _config.DirectMLDeviceId = _classifier.SelectedDeviceId;
+                _config.TrySave("appsettings.json", out _);
+            }
+
             return true;
         }
         catch (Exception ex)
@@ -527,16 +555,22 @@ public partial class App : Application
                 return;
             }
 
-            _settingsWindow = new SettingsWindow(_config, IsAutostartEnabled(), _pavlok?.IsLoggedIn == true);
+            _settingsWindow = new SettingsWindow(
+                _config, IsAutostartEnabled(), _pavlok?.IsLoggedIn == true,
+                _classifier?.ExecutionProvider ?? "");
+
             var accepted = _settingsWindow.ShowDialog() == true;
             var result = _settingsWindow.Result;
             var autostart = _settingsWindow.AutostartRequested;
+            var acceleratorChanged = _settingsWindow.AcceleratorChanged;
             _settingsWindow = null;
 
             if (!accepted || result == null) return;
 
             ApplyConfig(result);
             SetAutostart(autostart);
+
+            if (acceleratorChanged) OfferRestart();
         }
         catch (Exception ex)
         {
@@ -587,6 +621,46 @@ public partial class App : Application
 
         if (!_config.TrySave("appsettings.json", out var saveError))
             Notify($"Settings applied for this session but could not be saved: {saveError}", BalloonIcon.Warning);
+    }
+
+    /// <summary>
+    /// Offers to restart after an accelerator change. A restart is genuinely required: the ONNX
+    /// Runtime native library is already loaded and cannot be replaced in a live process.
+    /// </summary>
+    private void OfferRestart()
+    {
+        var restart = ConfirmDialog.Show(
+            null,
+            "Restart to switch accelerator",
+            "The inference runtime can only be changed while it is not loaded, so Rewire Guard " +
+            "needs to restart. Monitoring resumes as soon as it comes back.",
+            confirmText: "Restart now",
+            cancelText: "Later");
+
+        if (!restart) return;
+
+        try
+        {
+            var exe = Environment.ProcessPath;
+            if (string.IsNullOrEmpty(exe))
+            {
+                Notify("Could not determine the executable path; restart manually.", BalloonIcon.Warning);
+                return;
+            }
+
+            // Release the single-instance mutex before the new process tries to claim it,
+            // otherwise the replacement exits immediately as a duplicate.
+            _singleInstanceMutex?.Dispose();
+            _singleInstanceMutex = null;
+
+            Process.Start(new ProcessStartInfo { FileName = exe, UseShellExecute = true });
+            Shutdown();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Restart failed.", ex);
+            Notify("Could not restart automatically. Quit and reopen Rewire Guard.", BalloonIcon.Warning);
+        }
     }
 
     private void ShowStartScreen()

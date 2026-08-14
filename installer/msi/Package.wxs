@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:util="http://wixtoolset.org/schemas/v4/wxs/util">
 
   <!--
     Per-user install. A tray app has no business asking for administrator rights: it writes its
@@ -34,26 +35,46 @@
 
     <StandardDirectory Id="ProgramMenuFolder" />
 
+    <!--
+      The install folder lives under the user profile and its subdirectory tree is harvested, so
+      MSI has no static RemoveFolder entry for each generated directory. Left alone, uninstall
+      deletes every file but leaves a skeleton of empty folders behind (and ICE64 fails the
+      build over exactly this). RemoveFolderEx reads the path back from the registry at uninstall
+      time and removes the tree recursively.
+    -->
+    <SetProperty Id="REWIREGUARD_INSTALLFOLDER" Value="[INSTALLFOLDER]" Before="CostFinalize" Sequence="both" />
+
     <Feature Id="Main" Title="Rewire Guard" Level="1">
       <ComponentGroupRef Id="AppFiles" />
       <ComponentGroupRef Id="Shortcuts" />
+      <ComponentRef Id="CleanupInstallFolder" />
     </Feature>
   </Package>
 
   <Fragment>
+    <Component Id="CleanupInstallFolder" Directory="INSTALLFOLDER" Guid="B6E2C7A4-51D8-4A93-8E77-2C4F0A9D3B15">
+      <!-- The keypath registry value is also what RemoveFolderEx reads the path from. -->
+      <RegistryValue Root="HKCU"
+                     Key="Software\RewireGuard"
+                     Name="InstallFolder"
+                     Type="string"
+                     Value="[INSTALLFOLDER]"
+                     KeyPath="yes" />
+      <util:RemoveFolderEx On="uninstall" Property="REWIREGUARD_INSTALLFOLDER" />
+    </Component>
+  </Fragment>
+
+  <Fragment>
     <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
       <!--
-        Harvests the publish output wholesale. Listing 38 files by hand would go stale the first
-        time a NuGet dependency changes its native payload.
+        Harvests the staged payload wholesale. Listing ~500 files by hand would go stale the
+        first time a NuGet dependency changes its native payload.
 
-        appsettings.json is excluded here and handled as its own component below, so that a
-        reinstall or upgrade does not overwrite settings the user has changed.
+        WiX's Files element has no Exclude attribute, so everything that must not be packaged
+        (appsettings.json, and Models\ for a slim build) is removed from the staging folder by
+        installer\build.ps1 before this runs.
       -->
-<?ifdef IncludeModel ?>
-      <Files Include="$(HarvestPath)\**" Exclude="$(HarvestPath)\appsettings.json" />
-<?else?>
-      <Files Include="$(HarvestPath)\**" Exclude="$(HarvestPath)\appsettings.json;$(HarvestPath)\Models\**" />
-<?endif?>
+      <Files Include="$(HarvestPath)\**" />
     </ComponentGroup>
   </Fragment>
 
@@ -74,16 +95,14 @@
                        Value="1"
                        KeyPath="yes" />
       </Component>
-
-      <!--
-        Config ships as its own permanent, never-overwritten component. Without this, every
-        upgrade would stamp the default appsettings.json back over whatever the user had set in
-        the Settings window.
-      -->
-      <Component Id="DefaultConfig" Directory="INSTALLFOLDER" Guid="*" Permanent="yes" NeverOverwrite="yes">
-        <File Id="AppSettingsJson" Source="$(HarvestPath)\appsettings.json" KeyPath="yes" />
-      </Component>
     </ComponentGroup>
   </Fragment>
+
+  <!--
+    Note: appsettings.json is deliberately NOT packaged. The app writes a default one on first
+    run if it is missing, which means an upgrade physically cannot overwrite settings the user
+    changed in the Settings window. That guarantee is fiddly to get right with MSI component
+    rules, and free if the installer simply never owns the file.
+  -->
 
 </Wix>

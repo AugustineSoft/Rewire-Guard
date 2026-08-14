@@ -41,12 +41,18 @@ public sealed class NsfwClassifier : IDisposable
 
     public string ExecutionProvider { get; }
 
-    public NsfwClassifier(string modelPath, int inputSize, int nsfwIndex)
+    /// <summary>
+    /// DirectML adapter actually in use, or -1 when running on CPU. The host persists this so the
+    /// adapter probe only happens once.
+    /// </summary>
+    public int SelectedDeviceId { get; }
+
+    public NsfwClassifier(string modelPath, int inputSize, int nsfwIndex, int preferredDeviceId = -1)
     {
         _inputSize = inputSize;
         _nsfwIndex = nsfwIndex;
 
-        (_session, ExecutionProvider) = CreateSession(modelPath);
+        (_session, ExecutionProvider, SelectedDeviceId) = CreateSession(modelPath, inputSize, preferredDeviceId);
 
         _inputName = _session.InputMetadata.Keys.First();
         _outputName = _session.OutputMetadata.Keys.First();
@@ -77,12 +83,12 @@ public sealed class NsfwClassifier : IDisposable
         WarmUp();
     }
 
-    private static (InferenceSession Session, string Provider) CreateSession(string modelPath)
+    private const int MaxAdaptersToProbe = 4;
+
+    private static (InferenceSession Session, string Provider, int DeviceId) CreateSession(
+        string modelPath, int inputSize, int preferredDeviceId)
     {
-        // Ask the runtime what it actually has rather than attempting each provider blind. The
-        // old code tried OpenVINO, then CUDA:1, then CUDA:0, then CPU -- and since no CUDA
-        // package is referenced, both CUDA attempts were guaranteed to fail only after trying
-        // to load a 344 MB model, adding seconds to every cold start.
+        // Ask the runtime what it actually has rather than attempting each provider blind.
         string[] available;
         try
         {
@@ -96,51 +102,156 @@ public sealed class NsfwClassifier : IDisposable
 
         Log.Info($"ONNX execution providers available: {string.Join(", ", available)}");
 
-        foreach (var candidate in PreferredProviders(available))
+        // OpenVINO first when present. On an Intel Core Ultra this lands on the NPU, which leaves
+        // the GPU free -- worth more than latency for a background process that must keep running
+        // while the machine is doing something demanding.
+        if (available.Any(p => p.Contains("OpenVINO", StringComparison.OrdinalIgnoreCase)))
         {
-            var sw = Stopwatch.StartNew();
-            SessionOptions? opts = null;
-            try
+            foreach (var device in new[] { "NPU", "GPU" })
             {
-                opts = new SessionOptions();
-                candidate.Configure(opts);
-                var session = new InferenceSession(modelPath, opts);
-                Log.Info($"Loaded model on {candidate.Name} in {sw.ElapsedMilliseconds} ms.");
-                return (session, candidate.Name);
-            }
-            catch (Exception ex)
-            {
-                opts?.Dispose();   // SessionOptions is unmanaged; the old code leaked one per attempt
-                Log.Warn($"Execution provider {candidate.Name} unavailable: {ex.Message}");
+                SessionOptions? opts = null;
+                try
+                {
+                    opts = new SessionOptions();
+                    opts.AppendExecutionProvider("OpenVINO",
+                        new Dictionary<string, string> { ["device_type"] = device });
+
+                    var sw = Stopwatch.StartNew();
+                    var session = new InferenceSession(modelPath, opts);
+                    Log.Info($"Loaded model on OpenVINO {device} in {sw.ElapsedMilliseconds} ms.");
+                    return (session, $"OpenVINO-{device}", -1);
+                }
+                catch (Exception ex)
+                {
+                    opts?.Dispose();
+                    Log.Warn($"OpenVINO {device} unavailable: {ex.Message}");
+                }
             }
         }
 
-        // Plain CPU, no options object to leak.
+        bool hasDml = available.Any(p => p.Contains("DML", StringComparison.OrdinalIgnoreCase));
+
+        if (hasDml)
+        {
+            int deviceId = preferredDeviceId >= 0
+                ? preferredDeviceId
+                : PickFastestAdapter(modelPath, inputSize);
+
+            if (TryOpenDml(modelPath, deviceId, out var dmlSession))
+            {
+                Log.Info($"Using DirectML adapter {deviceId}.");
+                return (dmlSession!, $"DirectML:{deviceId}", deviceId);
+            }
+
+            // A remembered adapter can disappear -- eGPU unplugged, driver swap, laptop switched
+            // to integrated only. Re-probe rather than dropping to CPU for the rest of time.
+            if (preferredDeviceId >= 0)
+            {
+                Log.Warn($"DirectML adapter {preferredDeviceId} is no longer usable; re-probing.");
+                int fallback = PickFastestAdapter(modelPath, inputSize);
+                if (fallback >= 0 && TryOpenDml(modelPath, fallback, out var retry))
+                {
+                    Log.Info($"Using DirectML adapter {fallback}.");
+                    return (retry!, $"DirectML:{fallback}", fallback);
+                }
+            }
+        }
+
         var cpuSw = Stopwatch.StartNew();
         var cpuSession = new InferenceSession(modelPath);
         Log.Info($"Loaded model on CPU in {cpuSw.ElapsedMilliseconds} ms.");
-        return (cpuSession, "CPU");
+        return (cpuSession, "CPU", -1);
     }
 
-    private readonly record struct ProviderCandidate(string Name, Action<SessionOptions> Configure);
-
-    private static IEnumerable<ProviderCandidate> PreferredProviders(string[] available)
+    /// <summary>
+    /// Opens a session on a specific DirectML adapter.
+    ///
+    /// <paramref name="quiet"/> is used while probing, where running off the end of the adapter
+    /// list is the normal stopping condition rather than a fault. Without it every startup logs a
+    /// multi-line native stack trace for the first non-existent adapter, which buries real errors.
+    /// </summary>
+    private static bool TryOpenDml(string modelPath, int deviceId, out InferenceSession? session, bool quiet = false)
     {
-        bool Has(string name) => available.Any(p => p.Contains(name, StringComparison.OrdinalIgnoreCase));
+        session = null;
+        if (deviceId < 0) return false;
 
-        if (Has("OpenVINO"))
+        SessionOptions? opts = null;
+        try
         {
-            yield return new ProviderCandidate("OpenVINO-NPU", o =>
-                o.AppendExecutionProvider("OpenVINO", new Dictionary<string, string> { ["device_type"] = "NPU" }));
-            yield return new ProviderCandidate("OpenVINO-GPU", o =>
-                o.AppendExecutionProvider("OpenVINO", new Dictionary<string, string> { ["device_type"] = "GPU" }));
+            opts = new SessionOptions();
+            opts.AppendExecutionProvider_DML(deviceId);
+            session = new InferenceSession(modelPath, opts);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            opts?.Dispose();   // SessionOptions holds unmanaged state; a failed attempt must not leak it
+
+            if (quiet) Log.Info($"No DirectML adapter {deviceId}; end of adapter list.");
+            else Log.Warn($"DirectML adapter {deviceId} unavailable: {ex.Message.Split('\n')[0]}");
+
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Times one inference on each DirectML adapter and returns the fastest.
+    ///
+    /// Necessary because adapter 0 is typically the integrated GPU. On a laptop with a discrete
+    /// card, accepting the default costs most of the available performance -- measured on a Core
+    /// Ultra 7 155H, adapter 0 (Arc iGPU) took 144 ms per inference and adapter 1 (RTX 4060) took
+    /// 37 ms. Ranking by name or vendor would be guesswork; measuring is a couple of seconds once,
+    /// after which the winner is cached in config.
+    /// </summary>
+    private static int PickFastestAdapter(string modelPath, int inputSize)
+    {
+        int best = -1;
+        double bestMs = double.MaxValue;
+
+        for (int deviceId = 0; deviceId < MaxAdaptersToProbe; deviceId++)
+        {
+            if (!TryOpenDml(modelPath, deviceId, out var session, quiet: true))
+                break;   // adapter indices are contiguous, so the first miss ends the list
+
+            using (session)
+            {
+                try
+                {
+                    var elapsed = TimeOneInference(session!, inputSize);
+                    Log.Info($"DirectML adapter {deviceId}: {elapsed:N1} ms per inference.");
+
+                    if (elapsed < bestMs)
+                    {
+                        bestMs = elapsed;
+                        best = deviceId;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn($"DirectML adapter {deviceId} failed during probe: {ex.Message}");
+                }
+            }
         }
 
-        if (Has("DML"))
-            yield return new ProviderCandidate("DirectML", o => o.AppendExecutionProvider("DML"));
+        if (best >= 0) Log.Info($"Fastest DirectML adapter: {best} at {bestMs:N1} ms.");
+        else Log.Info("No usable DirectML adapter found.");
 
-        if (Has("CUDA"))
-            yield return new ProviderCandidate("CUDA", o => o.AppendExecutionProvider_CUDA(0));
+        return best;
+    }
+
+    private static double TimeOneInference(InferenceSession session, int inputSize)
+    {
+        var inputName = session.InputMetadata.Keys.First();
+        var tensor = new DenseTensor<float>(new[] { 1, 3, inputSize, inputSize });
+        var inputs = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor(inputName, tensor) };
+
+        // First run pays for kernel compilation and shader caching, which is not what we want to
+        // compare adapters on.
+        using (session.Run(inputs)) { }
+
+        var sw = Stopwatch.StartNew();
+        using (session.Run(inputs)) { }
+        return sw.Elapsed.TotalMilliseconds;
     }
 
     /// <summary>
