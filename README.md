@@ -2,14 +2,8 @@
 
 Windows tray app: periodically screenshots the desktop, runs it through a
 local ONNX-exported NSFW classifier (AdamCodd/vit-base-nsfw-detector), and
-escalates an on-screen intervention if it keeps firing. Classification is fully
-local -- no image ever leaves the machine, no per-request cost, works offline.
-The optional Pavlok integration is the only thing that talks to the network.
-
-This replaces the earlier iOS/Safari-extension plan, which hit a hard wall:
-Xcode is macOS-only and there's no supported way around that. Watching the
-screen directly on Windows also sidesteps the browser-extension-to-native-app
-bridge entirely -- it works regardless of which app or browser tab is on screen.
+escalates an intervention if it keeps firing. Classification is fully
+local, no data is collected and the only thing that leaves your machine is the optional pavlok API calls.
 
 ## Prerequisites
 
