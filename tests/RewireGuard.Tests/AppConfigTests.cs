@@ -97,6 +97,54 @@ public class AppConfigTests
         Assert.False(double.IsNaN(config.DetectionThreshold));
     }
 
+    [Theory]
+    [InlineData("winword")]   // closes the document
+    [InlineData("excel")]
+    [InlineData("devenv")]    // closes the file
+    [InlineData("code")]
+    [InlineData("notepad")]   // tabbed since Windows 11, and holds unsaved text
+    [InlineData("pwsh")]      // closes the tab and whatever is running in it
+    public void ProtectsApplicationsWhereCtrlWDiscardsWork(string process)
+    {
+        var config = new AppConfig().Validated();
+        Assert.Contains(process, config.ProtectedProcessNames, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData("chrome")]
+    [InlineData("firefox")]
+    [InlineData("msedge")]
+    [InlineData("explorer")]  // Ctrl+W just closes the window
+    [InlineData("discord")]
+    [InlineData("spotify")]
+    public void DoesNotProtectApplicationsWhereCtrlWIsHarmless(string process)
+    {
+        var config = new AppConfig().Validated();
+        Assert.DoesNotContain(process, config.ProtectedProcessNames, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ObsoleteBrowserAllowlistIsDiscardedRatherThanMigrated()
+    {
+        // The old key listed the only processes allowed to receive Ctrl+W. Copying those values
+        // into the blocklist would invert their meaning and block every browser.
+        var config = new AppConfig
+        {
+            BrowserProcessNames = new List<string> { "chrome", "firefox" }
+        }.Validated();
+
+        Assert.Null(config.BrowserProcessNames);
+        Assert.DoesNotContain("chrome", config.ProtectedProcessNames, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain("firefox", config.ProtectedProcessNames, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void EmptyProtectedListIsAllowedSoCtrlWGoesEverywhere()
+    {
+        var config = new AppConfig { ProtectedProcessNames = new List<string>() }.Validated();
+        Assert.Empty(config.ProtectedProcessNames);
+    }
+
     [Fact]
     public void MissingConfigFileYieldsDefaultsWithoutError()
     {

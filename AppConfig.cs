@@ -136,15 +136,38 @@ public class AppConfig
     public bool OverlayFocusLock { get; set; } = false;
 
     /// <summary>
-    /// Process names (no .exe) that "Close active tab" is willing to send Ctrl+W to. Ctrl+W in
-    /// Word, Visual Studio or Explorer closes a document or window instead of a tab, so sending
-    /// it blind can destroy unsaved work.
+    /// Applications that "Close active tab" will never send Ctrl+W to. Process names, no .exe.
+    ///
+    /// Ctrl+W is sent to whatever window has focus, because in browsers, File Explorer, image
+    /// viewers, chat clients and most other things it closes a tab or window and costs nothing.
+    /// This list is the exception: in these applications the same keystroke closes a document,
+    /// project or session, which can discard unsaved work or kill a running process.
+    ///
+    /// Empty the list to send Ctrl+W everywhere with no exceptions.
     /// </summary>
-    public List<string> BrowserProcessNames { get; set; } = new()
+    public List<string> ProtectedProcessNames { get; set; } = new()
     {
-        "chrome", "msedge", "firefox", "brave", "opera", "opera_gx",
-        "vivaldi", "arc", "librewolf", "waterfox", "zen", "iexplore"
+        // Office: closes the document
+        "winword", "excel", "powerpnt", "onenote", "msaccess", "outlook", "visio", "mspub",
+
+        // Editors and IDEs: closes the file or the project
+        "devenv", "code", "code - insiders", "vscodium", "rider64", "idea64", "pycharm64",
+        "webstorm64", "phpstorm64", "clion64", "goland64", "rubymine64", "datagrip64",
+        "studio64", "eclipse", "netbeans", "sublime_text", "notepad++", "notepad",
+
+        // Terminals: closes the tab and takes any running process with it
+        "windowsterminal", "wt", "powershell", "pwsh", "cmd", "conhost", "mintty", "alacritty",
+
+        // Creative tools: closes the open document
+        "photoshop", "illustrator", "indesign", "premiere", "afterfx", "blender", "krita", "gimp"
     };
+
+    /// <summary>
+    /// Obsolete allowlist, replaced by <see cref="ProtectedProcessNames"/>. Read only so an older
+    /// appsettings.json does not fail to parse; the value is ignored, since an allowlist cannot be
+    /// meaningfully converted into a blocklist.
+    /// </summary>
+    public List<string>? BrowserProcessNames { get; set; }
 
     /// <summary>Valid Pavlok stimulus types; anything else is rejected during validation.</summary>
     private static readonly HashSet<string> ValidStimulusTypes =
@@ -255,7 +278,9 @@ public class AppConfig
         SitSecondsLevel2 = other.SitSecondsLevel2;
         SitSecondsLevel3 = other.SitSecondsLevel3;
         OverlayFocusLock = other.OverlayFocusLock;
-        BrowserProcessNames = new List<string>(other.BrowserProcessNames);
+        Accelerator = other.Accelerator;
+        DirectMLDeviceId = other.DirectMLDeviceId;
+        ProtectedProcessNames = new List<string>(other.ProtectedProcessNames);
     }
 
     /// <summary>Independent copy, so a settings window can be cancelled without side effects.</summary>
@@ -310,7 +335,17 @@ public class AppConfig
                      "trigger more readily than the whole-frame pass. That is allowed but rarely intended.");
         }
 
-        BrowserProcessNames ??= new List<string>();
+        if (BrowserProcessNames is { Count: > 0 })
+        {
+            // Not migrated on purpose: the old setting listed the only apps allowed to receive
+            // Ctrl+W, which is the opposite of what ProtectedProcessNames means. Carrying the
+            // values across would silently block every browser instead.
+            Log.Warn("BrowserProcessNames is obsolete and ignored. Ctrl+W now goes to any window " +
+                     "except those in ProtectedProcessNames; edit that list instead.");
+            BrowserProcessNames = null;
+        }
+
+        ProtectedProcessNames ??= new List<string>();
 
         if (!Enum.TryParse<AcceleratorChoice>(
                 Accelerator?.Replace("CPU", "Cpu", StringComparison.OrdinalIgnoreCase) ?? "",

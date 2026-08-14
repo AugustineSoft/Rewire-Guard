@@ -151,10 +151,13 @@ level dims the screen further, shifts colour from amber toward red, and — if a
 
 Every escalation level offers two actions:
 
-- **Close active tab** sends Ctrl+W to the focused browser. At levels 2 and 3 the overlay then
-  holds for a short pause before releasing you. If the focused window is not a browser, nothing is
-  sent — Ctrl+W closes documents in other applications, and the app will not risk your unsaved
-  work.
+- **Close active tab** sends Ctrl+W to whatever window has focus, which closes the tab in a
+  browser, the window in File Explorer, and so on. At levels 2 and 3 the overlay then holds for a
+  short pause before releasing you. It is skipped for a small list of applications where Ctrl+W
+  closes a *document* rather than a tab — Office, code editors and IDEs, terminals, and creative
+  tools — because there it can discard unsaved work or kill a running process. Edit
+  `ProtectedProcessNames` in `appsettings.json` to change that list, or empty it to send Ctrl+W
+  everywhere.
 - **Override** dismisses the warning immediately. It confirms first, and applies a level 3
   stimulus.
 
@@ -246,6 +249,10 @@ which leaves the GPU untouched. Failing that, raise **Poll interval**.
 
 **Full-screen video appears black to it.** Some hardware-accelerated video paths cannot be
 captured by the screen-grab method used here. This is a known limitation.
+
+**"Close active tab" did nothing.** The focused application is on the `ProtectedProcessNames` list
+in `appsettings.json`, where Ctrl+W would close a document instead of a tab. The overlay says
+which application it was. Remove it from the list if you want the keystroke sent there anyway.
 
 **Something crashed.** Logs are at `%LOCALAPPDATA%\RewireGuard\logs`, reachable from
 **tray icon → Open log folder**. They record startup, accelerator selection, timings and errors —

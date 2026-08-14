@@ -324,16 +324,16 @@ public partial class OverlayWindow : Window
                 return;
             }
 
-            if (!IsAllowedBrowser(hwnd, out var processName))
+            if (IsProtected(hwnd, out var processName))
             {
-                // Ctrl+W closes the current document in Word, the current file in Visual Studio,
-                // and the current window in Explorer. Firing it at whatever happens to be focused
-                // is a good way to destroy unsaved work, so it is browsers only.
+                // Ctrl+W closes the open document in Word, the current file in an IDE, and the
+                // active tab (plus whatever is running in it) in a terminal. Everywhere else it
+                // closes a tab or window and costs nothing, so only these are held back.
                 Show();
                 CloseTabButton.IsEnabled = true;
-                SubText.Text = $"The focused window ({processName}) is not a known browser, so nothing was closed. " +
-                               "Close the tab yourself, or add it to BrowserProcessNames in appsettings.json.";
-                Log.Info($"Refused to send Ctrl+W to non-browser process '{processName}'.");
+                SubText.Text = $"Not closing anything in {processName} — Ctrl+W would discard your work there. " +
+                               "Close it yourself, or edit ProtectedProcessNames in appsettings.json.";
+                Log.Info($"Refused to send Ctrl+W to protected process '{processName}'.");
                 return;
             }
 
@@ -371,10 +371,15 @@ public partial class OverlayWindow : Window
     }
 
     /// <summary>
-    /// True when the foreground window belongs to a process on the browser allowlist.
-    /// Failing closed here is deliberate: if we cannot identify the process, we do not send keys.
+    /// True when the foreground window belongs to an application where Ctrl+W would close a
+    /// document rather than a tab.
+    ///
+    /// If the process cannot be identified this returns false, so the keystroke is still sent.
+    /// The protected list is a short, specific set of applications; an unidentifiable window is
+    /// far more likely to be an ordinary one than a copy of Word, and refusing in that case would
+    /// make the button quietly stop working for no visible reason.
     /// </summary>
-    private bool IsAllowedBrowser(IntPtr hwnd, out string processName)
+    private bool IsProtected(IntPtr hwnd, out string processName)
     {
         processName = "unknown";
         try
@@ -386,7 +391,7 @@ public partial class OverlayWindow : Window
             var name = process.ProcessName;
             processName = name;
 
-            return _config.BrowserProcessNames
+            return _config.ProtectedProcessNames
                 .Any(n => string.Equals(n, name, StringComparison.OrdinalIgnoreCase));
         }
         catch (Exception ex)
