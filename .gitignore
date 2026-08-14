@@ -1,0 +1,29 @@
+# Build output
+bin/
+obj/
+dist/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# WiX intermediate output
+installer/**/bin/
+installer/**/obj/
+
+# Local credentials. PAVLOK_API_KEY / PAVLOK_EMAIL / PAVLOK_PASSWORD live here during
+# development and must never be committed.
+.env
+*.env
+!.env.example
+
+# The exported ONNX model is ~330 MB, well past GitHub's 100 MB per-file limit.
+# Export your own with scripts/convert_to_onnx.md -- see README.md step 1.
+Models/*.onnx
+
+# Logs and local state
+*.log
+
+# Machine-local tool settings (contains absolute paths from this machine)
+.claude/settings.local.json

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+
+  <!--
+    Per-user install. A tray app has no business asking for administrator rights: it writes its
+    autostart entry to HKCU, keeps its token and logs under %LOCALAPPDATA%, and never touches a
+    machine-wide resource. Installing per-user into %LOCALAPPDATA%\Programs means no UAC prompt
+    at install time and none at uninstall either.
+  -->
+  <Package Name="Rewire Guard"
+           Manufacturer="Rewire Guard"
+           Version="$(ProductVersion)"
+           UpgradeCode="D1F7CF78-0D02-4E36-B604-99EF0FC46D95"
+           Scope="perUser"
+           Compressed="yes">
+
+    <SummaryInformation Description="Rewire Guard - local screen monitor with escalating intervention" />
+
+    <!-- Replaces an older version in place rather than leaving two entries in Apps and Features. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of Rewire Guard is already installed. Uninstall it first if you want to go back to this one." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <Icon Id="AppIcon" SourceFile="$(HarvestPath)\RewireGuard.exe" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPNOREPAIR" Value="1" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="Rewire Guard" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder" />
+
+    <Feature Id="Main" Title="Rewire Guard" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentGroupRef Id="Shortcuts" />
+    </Feature>
+  </Package>
+
+  <Fragment>
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <!--
+        Harvests the publish output wholesale. Listing 38 files by hand would go stale the first
+        time a NuGet dependency changes its native payload.
+
+        appsettings.json is excluded here and handled as its own component below, so that a
+        reinstall or upgrade does not overwrite settings the user has changed.
+      -->
+<?ifdef IncludeModel ?>
+      <Files Include="$(HarvestPath)\**" Exclude="$(HarvestPath)\appsettings.json" />
+<?else?>
+      <Files Include="$(HarvestPath)\**" Exclude="$(HarvestPath)\appsettings.json;$(HarvestPath)\Models\**" />
+<?endif?>
+    </ComponentGroup>
+  </Fragment>
+
+  <Fragment>
+    <ComponentGroup Id="Shortcuts">
+      <Component Id="StartMenuShortcut" Directory="ProgramMenuFolder" Guid="9191F93C-65A6-4E85-B18D-042862378768">
+        <Shortcut Id="AppShortcut"
+                  Name="Rewire Guard"
+                  Description="Local screen monitor with escalating intervention"
+                  Target="[INSTALLFOLDER]RewireGuard.exe"
+                  WorkingDirectory="INSTALLFOLDER" />
+
+        <!-- A per-user component needs an HKCU keypath; a file under ProgramMenuFolder cannot be one. -->
+        <RegistryValue Root="HKCU"
+                       Key="Software\RewireGuard"
+                       Name="Installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes" />
+      </Component>
+
+      <!--
+        Config ships as its own permanent, never-overwritten component. Without this, every
+        upgrade would stamp the default appsettings.json back over whatever the user had set in
+        the Settings window.
+      -->
+      <Component Id="DefaultConfig" Directory="INSTALLFOLDER" Guid="*" Permanent="yes" NeverOverwrite="yes">
+        <File Id="AppSettingsJson" Source="$(HarvestPath)\appsettings.json" KeyPath="yes" />
+      </Component>
+    </ComponentGroup>
+  </Fragment>
+
+</Wix>

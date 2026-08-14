@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:bal="http://wixtoolset.org/schemas/v4/wxs/bal">
+
+  <!--
+    Burn bundle: wraps the MSI in RewireGuard-Setup.exe. An .exe is what people expect to
+    double-click, and it gives a real install UI instead of the bare Windows Installer progress
+    bar. It is also the seam where a runtime prerequisite would be chained, if the app were not
+    published self-contained.
+  -->
+  <Bundle Name="Rewire Guard"
+          Manufacturer="Rewire Guard"
+          Version="$(ProductVersion)"
+          UpgradeCode="4C2A6E51-3B9D-4F8A-9C21-7E4D5A8B6F30"
+          IconSourceFile="..\..\Assets\icon.ico"
+          Compressed="yes">
+
+    <BootstrapperApplication>
+      <bal:WixStandardBootstrapperApplication
+          Theme="hyperlinkLicense"
+          LicenseUrl=""
+          LogoFile="..\assets\logo.png"
+          SuppressOptionsUI="yes"
+          ShowVersion="yes" />
+    </BootstrapperApplication>
+
+    <Chain>
+      <!--
+        DisplayInternalUI stays off: the bundle already shows progress, and letting the MSI draw
+        its own UI on top produces two overlapping installers.
+
+        Visible="no" hides the MSI's separate Apps-and-Features entry, so uninstalling is done
+        through the bundle and there is exactly one thing to remove.
+      -->
+      <MsiPackage SourceFile="$(var.RewireGuardMsi.TargetPath)"
+                  DisplayInternalUI="no"
+                  Visible="no"
+                  Compressed="yes" />
+    </Chain>
+  </Bundle>
+
+</Wix>

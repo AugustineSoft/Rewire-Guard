@@ -1,0 +1,65 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>RewireGuard</AssemblyName>
+    <RootNamespace>RewireGuard</RootNamespace>
+
+    <!-- Declares Per-Monitor V2 DPI awareness; see the comment in app.manifest for why. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
+
+    <Version>1.0.0</Version>
+    <Product>Rewire Guard</Product>
+    <Company>Rewire Guard</Company>
+    <Description>Local NSFW screen monitor with escalating on-screen intervention.</Description>
+
+    <!-- Warnings-as-errors on the nullable/async mistakes that are silent bugs in a tray app. -->
+    <WarningsAsErrors>CS4014;CS8600;CS8602;CS8603;CS8618</WarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- OpenVINO build gives NPU/GPU acceleration on Intel hardware; the classifier falls back
+         to plain CPU automatically when no accelerated provider is present. -->
+    <PackageReference Include="Intel.ML.OnnxRuntime.OpenVino" Version="1.24.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.1" />
+    <PackageReference Include="RestSharp" Version="114.0.0" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.8" />
+    <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="1.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- ExcludeFromSingleFile so a PublishSingleFile build keeps appsettings.json editable on
+         disk instead of sealing it inside the executable. -->
+    <None Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+
+    <!-- Update, not Include: the file is already picked up by the SDK's default None glob, and
+         a second Include of the same path is a duplicate-item error waiting to happen.
+         Drop your exported model.onnx into Models/ before building; see README.md
+
+         ExcludeFromSingleFile matters most here: without it the 330 MB model is packed into the
+         portable executable and extracted to a temp folder on every single launch. Kept beside
+         the exe it is memory-mapped by ONNX Runtime directly, and can be swapped for a
+         re-exported model without rebuilding. -->
+    <None Update="Models\model.onnx" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\icon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The test project lives under this project's directory, so the SDK's default globs would
+         otherwise compile the test sources into the app itself. -->
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Page Remove="tests\**" />
+    <Resource Remove="tests\**" />
+  </ItemGroup>
+
+</Project>

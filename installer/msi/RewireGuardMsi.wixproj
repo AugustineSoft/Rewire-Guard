@@ -1,0 +1,36 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+
+  <PropertyGroup>
+    <OutputName>RewireGuard</OutputName>
+    <OutputType>Package</OutputType>
+    <InstallerPlatform>x64</InstallerPlatform>
+
+    <!--
+      Deliberately NOT in RewireGuard.sln. A .wixproj in the solution makes plain `dotnet build`
+      and `dotnet test` try to build the installer too, which requires a completed publish first.
+      Build through installer\build.ps1 instead.
+    -->
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Folder harvested into the package; build.ps1 points this at the publish output. -->
+    <HarvestPath Condition="'$(HarvestPath)' == ''">$(MSBuildThisFileDirectory)..\..\bin\publish</HarvestPath>
+
+    <!--
+      IncludeModel=false produces a ~25 MB package with no ONNX model. The app still installs and
+      runs; it reports the missing model and points at the README. Useful for updating the
+      application on a machine that already has model.onnx.
+    -->
+    <IncludeModel Condition="'$(IncludeModel)' == ''">true</IncludeModel>
+    <ProductVersion Condition="'$(ProductVersion)' == ''">1.0.0</ProductVersion>
+
+    <DefineConstants>HarvestPath=$(HarvestPath);ProductVersion=$(ProductVersion)</DefineConstants>
+    <DefineConstants Condition="'$(IncludeModel)' == 'true'">$(DefineConstants);IncludeModel=1</DefineConstants>
+  </PropertyGroup>
+
+  <Target Name="VerifyHarvestPath" BeforeTargets="Build">
+    <Error Condition="!Exists('$(HarvestPath)\RewireGuard.exe')"
+           Text="Nothing to package: no RewireGuard.exe under '$(HarvestPath)'. Run installer\build.ps1, which publishes first." />
+  </Target>
+
+</Project>
