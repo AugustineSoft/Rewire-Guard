@@ -136,6 +136,14 @@ public class AppConfig
     public bool OverlayFocusLock { get; set; } = false;
 
     /// <summary>
+    /// Whether the tray offers a one-click Pause (and pause-on-double-click). Off by design here:
+    /// this is a commitment-device build, and a single-click "off" defeats the point in exactly
+    /// the moment it is meant to hold. Quit and uninstall remain available, so the app is never
+    /// something you cannot stop deliberately -- only something you cannot stop impulsively.
+    /// </summary>
+    public bool AllowPause { get; set; } = false;
+
+    /// <summary>
     /// Applications that "Close active tab" will never send Ctrl+W to. Process names, no .exe.
     ///
     /// Ctrl+W is sent to whatever window has focus, because in browsers, File Explorer, image
@@ -278,6 +286,7 @@ public class AppConfig
         SitSecondsLevel2 = other.SitSecondsLevel2;
         SitSecondsLevel3 = other.SitSecondsLevel3;
         OverlayFocusLock = other.OverlayFocusLock;
+        AllowPause = other.AllowPause;
         Accelerator = other.Accelerator;
         DirectMLDeviceId = other.DirectMLDeviceId;
         ProtectedProcessNames = new List<string>(other.ProtectedProcessNames);

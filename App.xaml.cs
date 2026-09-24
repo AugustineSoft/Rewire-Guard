@@ -91,7 +91,9 @@ public partial class App : Application
         }
 
         _trayIcon = (TaskbarIcon)FindResource("TrayIcon");
-        _trayIcon.TrayMouseDoubleClick += (_, _) => TogglePause();
+        // Double-click pauses only when pause is enabled; in the commitment build it does nothing.
+        if (_config.AllowPause)
+            _trayIcon.TrayMouseDoubleClick += (_, _) => TogglePause();
         _trayIcon.ContextMenu = BuildTrayMenu();
 
         if (configError != null)
@@ -511,9 +513,14 @@ public partial class App : Application
         menu.Items.Add(_statusItem);
         menu.Items.Add(new Separator());
 
-        _pauseItem = new MenuItem { Header = "Pause" };
-        _pauseItem.Click += (_, _) => TogglePause();
-        menu.Items.Add(_pauseItem);
+        // Pause is omitted entirely unless AllowPause is set. Quit (below) is always present, so
+        // the app can still be stopped deliberately -- just not paused on impulse.
+        if (_config.AllowPause)
+        {
+            _pauseItem = new MenuItem { Header = "Pause" };
+            _pauseItem.Click += (_, _) => TogglePause();
+            menu.Items.Add(_pauseItem);
+        }
 
         var settingsItem = new MenuItem { Header = "Settings..." };
         settingsItem.Click += (_, _) => ShowSettings();
